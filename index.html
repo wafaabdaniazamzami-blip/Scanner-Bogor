@@ -204,6 +204,7 @@
       <button type="button" id="btnCek" aria-pressed="false">Butuh Cek</button>
     </div>
 
+
     <p id="pesan" role="status" aria-live="polite"></p>
 
     <div class="tombol">
@@ -216,7 +217,7 @@
 <div id="modalKamera" class="modal" role="dialog" aria-modal="true" aria-labelledby="mJudul" hidden>
   <div class="kotak">
     <h2 id="mJudul">Izinkan akses kamera</h2>
-    <p id="mTeks">Kamera dipakai untuk memindai barcode invoice. Tekan tombol biru, lalu pilih Izinkan pada pop-up browser.</p>
+    <p id="mTeks">Kamera dipakai untuk memindai barcode invoice. Tekan tombol hijau, lalu pilih Izinkan pada pop-up browser.</p>
     <button type="button" id="mIzin">Izinkan kamera</button>
     <button type="button" id="mFoto">Pakai foto barcode</button>
     <button type="button" id="mTutup">Ketik manual saja</button>
@@ -250,13 +251,11 @@
   function simpanLokal(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
   function bacaLokal(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
 
-  // PIN dan nama petugas ditanyakan sekali, lalu diingat di browser ini
+  // Nama petugas ditanyakan sekali, lalu diingat di browser ini (PIN ditangani pastikanPin)
   function ambilKredensial() {
-    let pin = bacaLokal('pin');
     let nama = bacaLokal('nama');
-    if (!pin) { pin = (prompt('Masukkan PIN akses') || '').trim(); simpanLokal('pin', pin); }
     if (!nama) { nama = (prompt('Masukkan nama Anda') || '').trim(); simpanLokal('nama', nama); }
-    return { pin, nama };
+    return { pin: bacaLokal('pin'), nama };
   }
 
   async function api(action, data) {
@@ -274,6 +273,26 @@
     const json = await res.json();
     if (json && json.code === 'PIN') { try { localStorage.removeItem('pin'); } catch (e) {} }
     return json;
+  }
+
+  // Meminta PIN dan memeriksanya ke server; PIN yang salah tidak disimpan dan ditanyakan lagi
+  async function pastikanPin() {
+    for (let i = 0; i < 3; i++) {
+      if (!bacaLokal('pin')) {
+        const p = (prompt(i ? 'PIN salah. Coba lagi:' : 'Masukkan PIN akses') || '').trim();
+        if (!p) return false;
+        simpanLokal('pin', p);
+      }
+      try {
+        const res = await api('ping', {});
+        if (res && res.ok) return true;
+        if (!res || res.code !== 'PIN') return true;   // tidak bisa diperiksa (mis. Code.gs belum di-deploy ulang)
+      } catch (e) {
+        return true;                                    // offline: diperiksa saat data dikirim
+      }
+      // PIN salah: api() sudah menghapusnya, putaran berikut menanyakan lagi
+    }
+    return false;
   }
 
   // ---- Antrean kirim ----
@@ -301,6 +320,7 @@
       while (antrean.length) {
         const paket = antrean.slice(0, 25);           // banyak invoice dalam satu kiriman
         const res = await api('save', { items: paket });
+        if (res && res.code === 'PIN') { if (await pastikanPin()) continue; else break; }
         if (!res || !res.ok) {
           if (res && res.message) tampilPesan(res.message, 'err');
           break;                                       // data tetap di antrean, dicoba lagi nanti
@@ -540,11 +560,13 @@
 
   // ---- Mulai ----
   window.addEventListener('load', () => {
-    ambilKredensial();
     tampilkan();
     tampilAntrean();
     bukaModal();
-    bilasAntrean();
+    pastikanPin().then((ok) => {
+      if (ok) bilasAntrean();
+      else tampilPesan('PIN belum benar. Muat ulang halaman untuk mencoba lagi.', 'err');
+    });
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
   });
   window.addEventListener('online', bilasAntrean);
